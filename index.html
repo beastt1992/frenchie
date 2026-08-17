@@ -47,8 +47,9 @@
   /* ── hero ── */
   header{padding:78px 0 0;position:relative;overflow:hidden}
   header::before{
-    content:"";position:absolute;right:-20%;top:-30%;width:80%;height:150%;
-    background:radial-gradient(circle,rgba(192,122,74,.22),transparent 62%);pointer-events:none;
+    content:"";position:absolute;left:0;right:0;top:-20%;height:150%;pointer-events:none;
+    /* closest-side + 鋪滿整個寬度，漸層才會在容器內就淡完，不會留下硬邊 */
+    background:radial-gradient(closest-side circle at 74% 34%,rgba(192,122,74,.26),transparent);
   }
   h1{margin:0 0 14px;font-size:clamp(36px,7vw,62px);line-height:1.08;letter-spacing:-.04em;font-weight:700}
   .lede{margin:0;color:var(--dim);font-size:clamp(16px,2.4vw,19px);max-width:36ch;line-height:1.7}
@@ -66,9 +67,26 @@
   .stage{position:relative;height:190px;margin:34px 0 0}
   .ground{position:absolute;left:0;right:0;bottom:0;height:1px;
     background:linear-gradient(90deg,transparent,var(--line) 10%,var(--line) 90%,transparent)}
-  #walker{position:absolute;bottom:0;left:0;background-repeat:no-repeat;will-change:transform}
+  #walker{position:absolute;bottom:0;left:0;background-image:var(--dog);background-repeat:no-repeat;will-change:transform;cursor:pointer}
+  #walker:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+  .stage .hint{
+    position:absolute;right:2px;top:2px;color:var(--faint);font-size:12.5px;
+    letter-spacing:.04em;pointer-events:none;
+  }
+  @media (max-width:520px){
+    .stage{height:150px}
+    .stage .hint{font-size:11.5px}
+  }
+  .spark{
+    position:absolute;font-size:17px;pointer-events:none;
+    animation:sparkUp 1.1s ease-out forwards;animation-delay:var(--d);
+  }
+  @keyframes sparkUp{
+    from{transform:translate(0,0) scale(.7);opacity:1}
+    to{transform:translate(var(--dx),-70px) scale(1.05);opacity:0}
+  }
   .bub{
-    position:absolute;bottom:150px;background:#fff;color:#111;border:2px solid #111;
+    position:absolute;bottom:64%;background:#fff;color:#111;border:2px solid #111;
     border-radius:14px;padding:5px 12px;font-size:13.5px;font-weight:700;white-space:nowrap;
     opacity:0;transition:opacity .2s;pointer-events:none;
   }
@@ -140,8 +158,9 @@
     </div>
     <div class="stage">
       <div class="bub" id="bub"></div>
-      <div id="walker"></div>
+      <div id="walker" aria-label="摸摸牠"></div>
       <div class="ground"></div>
+      <div class="hint"><span data-zh>↑ 點牠試試</span><span data-en hidden>↑ try petting it</span></div>
     </div>
   </div>
 </header>
@@ -312,23 +331,77 @@ document.querySelector('nav .logo i').style.backgroundSize = (158 * 12 * 30 / 15
 /* hero 上真的跑一隻 */
 const W = document.getElementById('walker');
 const B = document.getElementById('bub');
-const H = 128, S = H / RUN_H;
-W.style.width = (CW * S) + 'px';
-W.style.height = (CH * S) + 'px';
-W.style.backgroundSize = (CW * S * FRAMES) + 'px ' + (CH * S) + 'px';
 
-const RUN = [1,2,3,4,5,6], IDLE = 0, SIT = 7, BEG = 10;
+/* 尺寸跟著舞台寬度算。原本寫死 128px 高，在手機上等於 321px 寬，
+   塞在 390px 的螢幕裡整隻爆出來。 */
+let S = 1;
+function sizeWalker(){
+  const stage = W.parentElement.clientWidth || 320;
+  const h = Math.max(64, Math.min(128, stage * 0.26));
+  S = h / RUN_H;
+  W.style.width = (CW * S) + 'px';
+  W.style.height = (CH * S) + 'px';
+  W.style.backgroundSize = (CW * S * FRAMES) + 'px ' + (CH * S) + 'px';
+}
+sizeWalker();
+addEventListener('resize', sizeWalker);
+
+const RUN = [1,2,3,4,5,6], IDLE = 0, SIT = 7, WAVE = 9, BEG = 10, BELLY = 14, STRETCH = 15;
 const LINES = ['\u966a\u4f60\u6ed1\uff5e','\u6c6a\uff01','\u518d\u770b\u4e00\u7bc7\uff1f','\u6478\u6478\u6211\uff5e'];
 const LINES_EN = ['scrolling with you~','woof!','one more?','pet me~'];
 const st = { x: 20, dir: 1, f: 0, t: 0, mode: 'walk', hold: 0, prev: performance.now(), said: 0 };
 const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+const POSE = { walk: null, beg: BEG, sit: SIT, wave: WAVE, belly: BELLY, stretch: STRETCH };
 function frame(){
   if (st.mode === 'walk') return RUN[st.f % RUN.length];
-  if (st.mode === 'beg') return BEG;
-  if (st.mode === 'sit') return SIT;
-  return IDLE;
+  return POSE[st.mode] !== undefined && POSE[st.mode] !== null ? POSE[st.mode] : IDLE;
 }
+
+/* 摸摸：點一下牠會反應，並噴出愛心。
+   這頁的重點是「不用安裝就能感受到牠活著」，所以互動比說明重要。 */
+const PETS = ['wave','beg','belly'];
+const PET_ZH = ['嘿嘿～','摸摸我～','汪！','太讚了！'];
+const PET_EN = ['heh heh~','more please~','woof!','nice!'];
+let petCount = 0;
+
+function burst(){
+  const r = W.getBoundingClientRect();
+  const host = W.parentElement;
+  const hr = host.getBoundingClientRect();
+  for (let i = 0; i < 6; i++){
+    const e = document.createElement('span');
+    e.className = 'spark';
+    e.textContent = Math.random() < .6 ? '❤️' : '✨';
+    e.style.left = (r.left - hr.left + r.width * (.3 + Math.random() * .4)) + 'px';
+    e.style.bottom = (hr.bottom - r.top - r.height * .35) + 'px';
+    e.style.setProperty('--dx', ((Math.random() - .5) * 90).toFixed(0) + 'px');
+    e.style.setProperty('--d', (Math.random() * .18).toFixed(2) + 's');
+    host.appendChild(e);
+    setTimeout(() => e.remove(), 1200);
+  }
+}
+
+function petMe(){
+  if (reduce) return;
+  petCount++;
+  st.mode = PETS[(Math.random() * PETS.length) | 0];
+  st.hold = 1.9;
+  burst();
+  const en = document.documentElement.lang === 'en';
+  const arr = en ? PET_EN : PET_ZH;
+  B.textContent = petCount >= 8
+    ? (en ? "ok that's enough" : '好了夠了啦')
+    : arr[(Math.random() * arr.length) | 0];
+  B.classList.add('on');
+  st.said = performance.now() + 3000;
+  clearTimeout(petMe._t);
+  petMe._t = setTimeout(() => B.classList.remove('on'), 1800);
+}
+W.addEventListener('click', petMe);
+W.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); petMe(); } });
+W.setAttribute('role', 'button');
+W.setAttribute('tabindex', '0');
 function loop(now){
   const dt = Math.min(.05, (now - st.prev) / 1000); st.prev = now;
   const stage = W.parentElement.clientWidth;
@@ -360,7 +433,7 @@ function loop(now){
     B.classList.add('on');
     setTimeout(() => B.classList.remove('on'), 2300);
   }
-  B.style.left = Math.round(st.x + 12) + 'px';
+  B.style.left = Math.round(st.x + (CW * S) * 0.5 - 40) + 'px';
   requestAnimationFrame(loop);
 }
 if (reduce){
